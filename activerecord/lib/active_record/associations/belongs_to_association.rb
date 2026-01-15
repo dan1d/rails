@@ -11,26 +11,32 @@ module ActiveRecord
         when :destroy
           raise ActiveRecord::Rollback unless target.destroy
         when :destroy_async
-          if reflection.foreign_key.is_a?(Array)
-            primary_key_column = reflection.active_record_primary_key
-            id = reflection.foreign_key.map { |col| owner.public_send(col) }
+          id = if reflection.foreign_key.is_a?(Array)
+            reflection.foreign_key.map { |col| owner.public_send(col) }
           else
-            primary_key_column = reflection.active_record_primary_key
-            id = owner.public_send(reflection.foreign_key)
+            owner.public_send(reflection.foreign_key)
           end
 
-          association_class = if reflection.polymorphic?
-            owner.public_send(reflection.foreign_type)
+          association_model = if reflection.polymorphic?
+            owner.public_send(reflection.foreign_type).constantize
           else
             reflection.klass
+          end
+
+          association_primary_key = association_model.primary_key
+          if association_primary_key.blank?
+            raise UnknownPrimaryKey.new(
+              association_model,
+              "ActiveRecord cannot destroy associated records asynchronously without a primary key. Add a primary key or use dependent: :delete."
+            )
           end
 
           enqueue_destroy_association(
             owner_model_name: owner.class.to_s,
             owner_id: owner.id,
-            association_class: association_class.to_s,
+            association_class: association_model.to_s,
             association_ids: [id],
-            association_primary_key_column: primary_key_column,
+            association_primary_key_column: association_primary_key,
             ensuring_owner_was_method: options.fetch(:ensuring_owner_was, nil)
           )
         else
